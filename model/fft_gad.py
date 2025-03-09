@@ -143,13 +143,29 @@ class FFTGADBase(nn.Module):
         Identify regions with relatively uniform diffusion coefficients.
         Returns a mask where 1 indicates uniform regions suitable for FFT.
         """
+        print(f"CV shape: {cv.shape}, CH shape: {ch.shape}")
+        
         # Calculate local variance of diffusion coefficients
+        # Need to handle different shapes of cv and ch
         cv_var = F.avg_pool2d(cv**2, 3, stride=1, padding=1) - F.avg_pool2d(cv, 3, stride=1, padding=1)**2
         ch_var = F.avg_pool2d(ch**2, 3, stride=1, padding=1) - F.avg_pool2d(ch, 3, stride=1, padding=1)**2
+        
+        # Resize to match the smaller size
+        _, _, h_cv, w_cv = cv_var.shape
+        _, _, h_ch, w_ch = ch_var.shape
+        h_min = min(h_cv, h_ch)
+        w_min = min(w_cv, w_ch)
+        
+        if h_cv > h_min or w_cv > w_min:
+            cv_var = cv_var[:, :, :h_min, :w_min]
+        
+        if h_ch > h_min or w_ch > w_min:
+            ch_var = ch_var[:, :, :h_min, :w_min]
         
         # Regions with low variance are considered uniform
         uniform_regions = (cv_var < threshold) & (ch_var < threshold)
         
+        print(f"Uniform regions shape: {uniform_regions.shape}")
         return uniform_regions
     
     def fft_diffuse(self, depth, cv, ch, uniform_regions, l=0.24, fft_steps=10):
@@ -159,6 +175,10 @@ class FFTGADBase(nn.Module):
         print(f"FFT diffuse started with fft_steps={fft_steps}")
         batch_size, channels, height, width = depth.shape
         print(f"Image shape: {batch_size}x{channels}x{height}x{width}")
+        
+        # Get the shapes of the diffusion coefficients
+        _, _, h_cv, w_cv = cv.shape
+        _, _, h_ch, w_ch = ch.shape
         
         # Process the image in blocks
         block_count = 0
@@ -178,43 +198,63 @@ class FFTGADBase(nn.Module):
                     block = depth[b:b+1, :, y_start:y_end, x_start:x_end]
                     
                     # Handle edge cases for diffusion coefficients
-                    cv_end_y = min(y_end-1, cv.shape[2])
-                    ch_end_x = min(x_end-1, ch.shape[3])
+                    cv_y_end = min(y_end-1, h_cv)
+                    cv_x_end = min(x_end, w_cv)
+                    ch_y_end = min(y_end, h_ch)
+                    ch_x_end = min(x_end-1, w_ch)
                     
-                    block_cv = cv[b:b+1, :, y_start:cv_end_y, x_start:x_end]
-                    block_ch = ch[b:b+1, :, y_start:y_end, x_start:ch_end_x]
-                    block_uniform = uniform_regions[b:b+1, :, y_start:y_end, x_start:x_end]
-                    
-                    # If the block is mostly uniform, apply FFT diffusion
-                    block_uniformity = block_uniform.float().mean().item()
-                    if block_uniformity > 0.7:
-                        fft_applied_count += 1
-                        # Apply FFT-based diffusion
-                        block = self.fft_diffuse_block(block, block_cv, block_ch, l, fft_steps)
+                    try:
+                        # Make sure we don't go out of bounds
+                        if y_start >= cv_y_end or x_start >= cv_x_end:
+                            continue
+                            
+                        if y_start >= ch_y_end or x_start >= ch_x_end:
+                            continue
+                            
+                        block_cv = cv[b:b+1, :, y_start:cv_y_end, x_start:cv_x_end]
+                        block_ch = ch[b:b+1, :, y_start:ch_y_end, x_start:ch_x_end]
                         
-                        # Apply blending for overlap regions to avoid boundary artifacts
-                        if y > 0 or x > 0:
-                            # Create blending weights for smooth transition
-                            blend_y = torch.ones_like(block)
-                            blend_x = torch.ones_like(block)
+                        # Get the corresponding region from uniform_regions
+                        ur_y_end = min(y_end, uniform_regions.shape[2])
+                        ur_x_end = min(x_end, uniform_regions.shape[3])
+                        
+                        if y_start >= ur_y_end or x_start >= ur_x_end:
+                            continue
                             
-                            if y > 0:
-                                for i in range(min(self.overlap, y_end - y_start)):
-                                    blend_y[:, :, i, :] = i / self.overlap
+                        block_uniform = uniform_regions[b:b+1, :, y_start:ur_y_end, x_start:ur_x_end]
+                        
+                        # If the block is mostly uniform, apply FFT diffusion
+                        block_uniformity = block_uniform.float().mean().item()
+                        if block_uniformity > 0.7:
+                            fft_applied_count += 1
+                            # Apply FFT-based diffusion
+                            block = self.fft_diffuse_block(block, block_cv, block_ch, l, fft_steps)
                             
-                            if x > 0:
-                                for i in range(min(self.overlap, x_end - x_start)):
-                                    blend_x[:, :, :, i] = i / self.overlap
-                            
-                            blend = blend_y * blend_x
-                            
-                            # Apply blending
-                            depth[b:b+1, :, y_start:y_end, x_start:x_end] = (
-                                depth[b:b+1, :, y_start:y_end, x_start:x_end] * (1 - blend) + 
-                                block * blend
-                            )
-                        else:
-                            depth[b:b+1, :, y_start:y_end, x_start:x_end] = block
+                            # Apply blending for overlap regions to avoid boundary artifacts
+                            if y > 0 or x > 0:
+                                # Create blending weights for smooth transition
+                                blend_y = torch.ones_like(block)
+                                blend_x = torch.ones_like(block)
+                                
+                                if y > 0:
+                                    for i in range(min(self.overlap, y_end - y_start)):
+                                        blend_y[:, :, i, :] = i / self.overlap
+                                
+                                if x > 0:
+                                    for i in range(min(self.overlap, x_end - x_start)):
+                                        blend_x[:, :, :, i] = i / self.overlap
+                                
+                                blend = blend_y * blend_x
+                                
+                                # Apply blending
+                                depth[b:b+1, :, y_start:y_end, x_start:x_end] = (
+                                    depth[b:b+1, :, y_start:y_end, x_start:x_end] * (1 - blend) + 
+                                    block * blend
+                                )
+                            else:
+                                depth[b:b+1, :, y_start:y_end, x_start:x_end] = block
+                    except Exception as e:
+                        print(f"Error processing block at ({y_start}:{y_end}, {x_start}:{x_end}): {e}")
         
         print(f"FFT diffuse completed. Processed {block_count} blocks, applied FFT to {fft_applied_count} blocks ({fft_applied_count/block_count*100:.2f}%)")
         return depth
