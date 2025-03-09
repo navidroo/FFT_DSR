@@ -41,3 +41,8 @@ parser.add_argument('--no-opt', action='store_true', help='Don\'t optimize')
 parser.add_argument('--feature-extractor', type=str, default='UNet', help="Feature extractor for edge potentials. 'none' for the unlearned version.") 
 parser.add_argument('--Npre', type=int, default=8000, help='N learned iterations, but without gradients')
 parser.add_argument('--Ntrain', type=int, default=1024, help='N learned iterations with gradients')
+
+# FFT-specific parameters
+parser.add_argument('--use-fft', action='store_true', default=False, help='Use FFT-accelerated diffusion')
+parser.add_argument('--block-size', type=int, default=64, help='Block size for FFT processing')
+parser.add_argument('--overlap', type=int, default=16, help='Overlap between blocks for FFT processing')

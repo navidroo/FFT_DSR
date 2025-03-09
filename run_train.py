@@ -12,7 +12,7 @@ from torchvision.transforms import Normalize
 from tqdm import tqdm
 
 from arguments import train_parser
-from model import GADBase
+from model import GADBase, FFTGADBase
 from data import MiddleburyDataset, NYUv2Dataset, DIMLDataset
 from losses import get_loss
 from utils import new_log, to_cuda, seed_all
@@ -31,16 +31,27 @@ class Trainer:
         
         seed_all(args.seed)
 
-        self.model = GADBase( 
-            args.feature_extractor, 
-            Npre=args.Npre,
-            Ntrain=args.Ntrain, 
-        ).cuda()
+        # Choose between regular GADBase and FFT-accelerated version
+        if args.use_fft:
+            self.model = FFTGADBase( 
+                args.feature_extractor, 
+                Npre=args.Npre,
+                Ntrain=args.Ntrain,
+                block_size=args.block_size,
+                overlap=args.overlap
+            ).cuda()
+        else:
+            self.model = GADBase( 
+                args.feature_extractor, 
+                Npre=args.Npre,
+                Ntrain=args.Ntrain, 
+            ).cuda()
 
         self.experiment_folder, self.args.expN, self.args.randN = new_log(os.path.join(args.save_dir, args.dataset), args)
         self.args.experiment_folder = self.experiment_folder
 
         if self.use_wandb:
+            import wandb
             wandb.init(project=args.wandb_project, dir=self.experiment_folder)
             wandb.config.update(self.args)
             self.writer = None
