@@ -265,34 +265,48 @@ class FFTGADBase(nn.Module):
         This simulates multiple steps of diffusion in the frequency domain.
         """
         # Average diffusion coefficients for the block
-        cv_mean = cv.mean()
-        ch_mean = ch.mean()
-        
         try:
+            cv_mean = cv.mean()
+            ch_mean = ch.mean()
+            
+            print(f"Block shape: {block.shape}, CV shape: {cv.shape}, CH shape: {ch.shape}")
+            print(f"CV mean: {cv_mean.item()}, CH mean: {ch_mean.item()}")
+            
             # Apply FFT
+            print("Applying FFT...")
             fft_block = torch.fft.rfft2(block)
+            print(f"FFT block shape: {fft_block.shape}")
             
             # Create diffusion kernel in frequency domain
             h, w = block.shape[2], block.shape[3]
+            print(f"Creating frequency domain kernel with h={h}, w={w}")
             ky = torch.arange(0, h).reshape(-1, 1).repeat(1, w//2 + 1).to(block.device) * (2 * np.pi / h)
             kx = torch.arange(0, w//2 + 1).reshape(1, -1).repeat(h, 1).to(block.device) * (2 * np.pi / w)
             
             # Diffusion operator in frequency domain
             # This simulates multiple steps of diffusion
+            print("Creating diffusion operator...")
             diffusion_operator = 1 - 2 * l * (cv_mean * (1 - torch.cos(ky)) + ch_mean * (1 - torch.cos(kx)))
+            print(f"Diffusion operator shape: {diffusion_operator.shape}")
             
             # Apply multiple steps of diffusion in frequency domain
+            print(f"Applying {steps} steps of diffusion...")
             diffusion_operator = diffusion_operator ** steps
             
             # Apply the operator
+            print("Applying operator to FFT block...")
             fft_block = fft_block * diffusion_operator.unsqueeze(0).unsqueeze(0)
             
             # Inverse FFT
+            print("Applying inverse FFT...")
             block = torch.fft.irfft2(fft_block, s=(h, w))
+            print(f"Result block shape: {block.shape}")
             
             return block
         except Exception as e:
+            import traceback
             print(f"Error in FFT diffusion block: {e}")
+            traceback.print_exc()
             # Return original block if FFT fails
             return block
 

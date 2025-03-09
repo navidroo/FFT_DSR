@@ -13,6 +13,7 @@ import numpy as np
 import time
 import argparse
 from collections import defaultdict
+import traceback
 
 from model import FFTGADBase
 from data import MiddleburyDataset, NYUv2Dataset, DIMLDataset
@@ -38,14 +39,20 @@ def parse_args():
     return parser.parse_args()
 
 def get_dataset(dataset_name, data_dir, scale):
-    if dataset_name == 'middlebury':
-        return MiddleburyDataset(data_dir=data_dir, split='test', scale=scale)
-    elif dataset_name == 'nyuv2':
-        return NYUv2Dataset(data_dir=data_dir, split='test', scale=scale)
-    elif dataset_name == 'diml':
-        return DIMLDataset(data_dir=data_dir, split='test', scale=scale)
-    else:
-        raise ValueError(f'Unknown dataset: {dataset_name}')
+    print(f"Creating {dataset_name} dataset with data_dir={data_dir}, scale={scale}")
+    try:
+        if dataset_name == 'middlebury':
+            return MiddleburyDataset(data_dir=data_dir, split='test', scale=scale)
+        elif dataset_name == 'nyuv2':
+            return NYUv2Dataset(data_dir=data_dir, split='test', scale=scale)
+        elif dataset_name == 'diml':
+            return DIMLDataset(data_dir=data_dir, split='test', scale=scale)
+        else:
+            raise ValueError(f'Unknown dataset: {dataset_name}')
+    except Exception as e:
+        print(f"Error creating dataset: {e}")
+        traceback.print_exc()
+        raise
 
 def test_fft_training():
     args = parse_args()
@@ -55,24 +62,29 @@ def test_fft_training():
     
     # Create dataset
     try:
+        print("Creating dataset...")
         dataset = get_dataset(args.dataset, args.data_dir, args.scale)
         print(f"Dataset created with {len(dataset)} samples")
     except Exception as e:
         print(f"Error creating dataset: {e}")
+        traceback.print_exc()
         return
     
     # Create dataloader
     try:
+        print("Creating dataloader...")
         dataloader = torch.utils.data.DataLoader(
             dataset, batch_size=args.batch_size, shuffle=False, num_workers=0
         )
         print(f"Dataloader created with {len(dataloader)} batches")
     except Exception as e:
         print(f"Error creating dataloader: {e}")
+        traceback.print_exc()
         return
     
     # Create model
     try:
+        print("Creating model...")
         model = FFTGADBase(
             feature_extractor='UNet',
             Npre=args.Npre,
@@ -80,17 +92,20 @@ def test_fft_training():
             block_size=args.block_size,
             overlap=args.overlap
         ).cuda()
-        print("Model created")
+        print("Model created successfully")
     except Exception as e:
         print(f"Error creating model: {e}")
+        traceback.print_exc()
         return
     
     # Create optimizer
     try:
+        print("Creating optimizer...")
         optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
-        print("Optimizer created")
+        print("Optimizer created successfully")
     except Exception as e:
         print(f"Error creating optimizer: {e}")
+        traceback.print_exc()
         return
     
     # Test forward and backward pass
@@ -99,11 +114,19 @@ def test_fft_training():
         model.train()
         
         # Get a batch
+        print("Getting a batch from dataloader...")
         for batch_idx, sample in enumerate(dataloader):
+            print(f"Processing batch {batch_idx+1}/{len(dataloader)}")
             if batch_idx > 0:
                 break
                 
+            print("Moving batch to GPU...")
             sample = to_cuda(sample)
+            
+            print("Sample keys:", sample.keys())
+            for key, value in sample.items():
+                if isinstance(value, torch.Tensor):
+                    print(f"  {key}: shape={value.shape}, dtype={value.dtype}, device={value.device}")
             
             # Forward pass
             print("Starting forward pass...")
@@ -113,6 +136,7 @@ def test_fft_training():
             print(f"Forward pass completed in {forward_time:.2f} seconds")
             
             # Calculate loss
+            print("Calculating loss...")
             pred = output['y_pred']
             target = sample['y_gt']
             loss = F.l1_loss(pred, target)
@@ -133,7 +157,6 @@ def test_fft_training():
             
     except Exception as e:
         print(f"Error during forward/backward pass: {e}")
-        import traceback
         traceback.print_exc()
         return
 
