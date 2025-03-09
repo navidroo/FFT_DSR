@@ -31,21 +31,39 @@ class Trainer:
         
         seed_all(args.seed)
 
+        # Check CUDA availability
+        if torch.cuda.is_available():
+            print(f"CUDA is available. Using GPU: {torch.cuda.get_device_name(0)}")
+        else:
+            print("WARNING: CUDA is not available! Training will be extremely slow on CPU.")
+            
         # Choose between regular GADBase and FFT-accelerated version
         if args.use_fft:
+            print("Creating FFT-accelerated model...")
             self.model = FFTGADBase( 
                 args.feature_extractor, 
                 Npre=args.Npre,
                 Ntrain=args.Ntrain,
                 block_size=args.block_size,
                 overlap=args.overlap
-            ).cuda()
+            )
         else:
+            print("Creating standard model...")
             self.model = GADBase( 
                 args.feature_extractor, 
                 Npre=args.Npre,
                 Ntrain=args.Ntrain, 
-            ).cuda()
+            )
+            
+        # Move model to GPU if available
+        if torch.cuda.is_available():
+            print("Moving model to GPU...")
+            self.model = self.model.cuda()
+            # Verify model is on GPU
+            for name, param in self.model.named_parameters():
+                print(f"Parameter '{name}' is on device: {param.device}")
+        else:
+            print("Model will run on CPU.")
 
         self.experiment_folder, self.args.expN, self.args.randN = new_log(os.path.join(args.save_dir, args.dataset), args)
         self.args.experiment_folder = self.experiment_folder

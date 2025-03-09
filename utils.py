@@ -10,15 +10,22 @@ import time
 
 
 def to_cuda(sample):
+    if not torch.cuda.is_available():
+        print("WARNING: CUDA is not available! Running on CPU.")
+        return sample
+        
+    print(f"Moving tensors to CUDA device: {torch.cuda.get_device_name(0)}")
     sampleout = {}
     for key, val in sample.items():
         if isinstance(val, torch.Tensor):
             sampleout[key] = val.cuda()
+            print(f"  Moved tensor '{key}' to {sampleout[key].device}")
         elif isinstance(val, list):
             new_val = []
-            for e in val:
+            for i, e in enumerate(val):
                 if isinstance(e, torch.Tensor):
                     new_val.append(e.cuda())
+                    print(f"  Moved list item {i} in '{key}' to {new_val[-1].device}")
                 else:
                     new_val.append(val)
             sampleout[key] = new_val

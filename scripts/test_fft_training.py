@@ -128,31 +128,75 @@ def test_fft_training():
                 if isinstance(value, torch.Tensor):
                     print(f"  {key}: shape={value.shape}, dtype={value.dtype}, device={value.device}")
             
-            # Forward pass
-            print("Starting forward pass...")
-            start_time = time.time()
-            output = model(sample, train=True)
-            forward_time = time.time() - start_time
-            print(f"Forward pass completed in {forward_time:.2f} seconds")
+            # Timing dictionary to store different phases
+            timing = {}
             
-            # Calculate loss
-            print("Calculating loss...")
+            # Forward pass
+            print("\n===== FORWARD PASS TIMING =====")
+            torch.cuda.synchronize()
+            start_time = time.time()
+            
+            # Feature extraction timing
+            feature_extraction_start = time.time()
+            # Forward pass
+            output = model(sample, train=True)
+            torch.cuda.synchronize()
+            forward_time = time.time() - start_time
+            
+            print(f"Total forward pass time: {forward_time:.4f} seconds")
+            
+            # Calculate metrics
+            print("\n===== QUALITY METRICS =====")
             pred = output['y_pred']
             target = sample['y_gt']
-            loss = F.l1_loss(pred, target)
-            print(f"Loss: {loss.item()}")
+            
+            # Calculate L1 loss (MAE)
+            mae_loss = F.l1_loss(pred, target)
+            print(f"MAE Loss: {mae_loss.item():.4f}")
+            
+            # Calculate MSE loss
+            mse_loss = F.mse_loss(pred, target)
+            print(f"MSE Loss: {mse_loss.item():.4f}")
+            
+            # Calculate RMSE
+            rmse = torch.sqrt(mse_loss)
+            print(f"RMSE: {rmse.item():.4f}")
+            
+            # Convert to cm for comparison with paper
+            mse_cm2 = mse_loss.item() * 10000  # Convert to cm²
+            mae_cm = mae_loss.item() * 100     # Convert to cm
+            rmse_cm = rmse.item() * 100        # Convert to cm
+            
+            print(f"\nMetrics in paper units:")
+            print(f"  MSE: {mse_cm2:.2f} cm²")
+            print(f"  MAE: {mae_cm:.2f} cm")
+            print(f"  RMSE: {rmse_cm:.2f} cm")
+            
+            # Use MAE as the training loss
+            loss = mae_loss
             
             # Backward pass
-            print("Starting backward pass...")
+            print("\n===== BACKWARD PASS TIMING =====")
+            torch.cuda.synchronize()
             start_time = time.time()
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            torch.cuda.synchronize()
             backward_time = time.time() - start_time
-            print(f"Backward pass completed in {backward_time:.2f} seconds")
+            print(f"Backward pass time: {backward_time:.4f} seconds")
             
-            print(f"Total time: {forward_time + backward_time:.2f} seconds")
-            print("Test completed successfully!")
+            print(f"\n===== TOTAL TIMING =====")
+            print(f"Forward pass: {forward_time:.4f} seconds")
+            print(f"Backward pass: {backward_time:.4f} seconds")
+            print(f"Total time: {forward_time + backward_time:.4f} seconds")
+            
+            # Estimate time for 2000 iterations
+            estimated_time_2000 = forward_time * (2000 / (args.Npre + args.Ntrain))
+            print(f"\n===== ESTIMATED TIME FOR 2000 ITERATIONS =====")
+            print(f"Estimated inference time for 2000 iterations: {estimated_time_2000:.4f} seconds")
+            
+            print("\nTest completed successfully!")
             return
             
     except Exception as e:
