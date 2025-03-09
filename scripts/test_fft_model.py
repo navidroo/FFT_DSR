@@ -1,6 +1,12 @@
 #!/usr/bin/env python
 # Script to test the FFT-based model
 
+import os
+import sys
+
+# Add the project root directory to the Python path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import torch
 import torch.nn.functional as F
 import numpy as np
