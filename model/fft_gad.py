@@ -22,6 +22,7 @@ class FFTGADBase(nn.Module):
             block_size=64, overlap=16,
     ):
         super().__init__()
+        print(f"Initializing FFTGADBase with Npre={Npre}, Ntrain={Ntrain}, block_size={block_size}, overlap={overlap}")
 
         self.feature_extractor_name = feature_extractor    
         self.Npre = Npre
@@ -31,12 +32,14 @@ class FFTGADBase(nn.Module):
  
         if feature_extractor=='none': 
             # RGB verion of DADA does not need a deep feature extractor
+            print("Using RGB version (no feature extractor)")
             self.feature_extractor = None
             self.Ntrain = 0
             self.logk = torch.log(torch.tensor(0.03))
 
         elif feature_extractor=='UNet':
             # Learned verion of DADA
+            print("Using UNet feature extractor")
             self.feature_extractor = torch.nn.Sequential(
                 torch.nn.Upsample(scale_factor=2, mode='bicubic'),
                 smp.Unet('resnet50', classes=FEATURE_DIM, in_channels=INPUT_DIM),
@@ -48,6 +51,7 @@ class FFTGADBase(nn.Module):
             raise NotImplementedError(f'Feature extractor {feature_extractor}')
              
     def forward(self, sample, train=False, deps=0.1):
+        print("FFTGADBase forward pass started")
         guide, source, mask_lr = sample['guide'], sample['source'], sample['mask_lr']
 
         # assert that all values are positive, otherwise shift depth map to positives
@@ -59,18 +63,21 @@ class FFTGADBase(nn.Module):
         else:
             shifted = False
 
+        print("Starting diffuse method")
         y_pred, aux = self.diffuse(sample['y_bicubic'].clone(), guide.clone(), source, mask_lr < 0.5,
                  K=torch.exp(self.logk), verbose=False, train=train)
+        print("Diffuse method completed")
 
         # revert the shift
         if shifted:
             y_pred -= deps
 
+        print("FFTGADBase forward pass completed")
         return {**{'y_pred': y_pred}, **aux}
 
     def diffuse(self, img, guide, source, mask_inv,
         l=0.24, K=0.01, verbose=False, eps=1e-8, train=False):
-
+        print("Diffuse method started")
         _,_,h,w = guide.shape
         _,_,sh,sw = source.shape
 
@@ -80,36 +87,55 @@ class FFTGADBase(nn.Module):
 
         # Deep Learning version or RGB version to calculate the coefficients
         if self.feature_extractor is None: 
+            print("Using RGB features")
             guide_feats = torch.cat([guide, img], 1) 
         else:
+            print("Extracting deep features")
             guide_feats = self.feature_extractor(torch.cat([guide, img-img.mean((1,2,3), keepdim=True)], 1))
+            print("Feature extraction completed")
         
         # Convert the features to coefficients with the Perona-Malik edge-detection function
+        print("Computing diffusion coefficients")
         cv, ch = c(guide_feats, K=K)
+        print("Diffusion coefficients computed")
         
         # Identify regions with relatively uniform diffusion coefficients
         # These are regions where FFT-based diffusion can be applied
+        print("Identifying uniform regions")
         uniform_regions = self.identify_uniform_regions(cv, ch)
+        print(f"Uniform regions identified: {uniform_regions.float().mean().item()*100:.2f}% of image")
 
         # Iterations without gradient
         if self.Npre > 0: 
             with torch.no_grad():
                 Npre = randrange(self.Npre) if train else self.Npre
+                print(f"Starting FFT diffusion with Npre={Npre}")
                 
                 # Apply FFT diffusion to uniform regions first
+                print("Applying FFT diffusion")
                 img = self.fft_diffuse(img, cv, ch, uniform_regions, l=l)
+                print("FFT diffusion completed")
                 
                 # Then apply standard diffusion for remaining iterations
-                for t in range(min(500, Npre)):                     
+                print(f"Starting standard diffusion for {min(500, Npre)} iterations")
+                for t in range(min(500, Npre)):
+                    if t % 100 == 0:
+                        print(f"Standard diffusion iteration {t}/{min(500, Npre)}")                     
                     img = diffuse_step(cv, ch, img, l=l)
                     img = adjust_step(img, source, mask_inv, upsample, downsample, eps=eps)
+                print("Standard diffusion completed")
 
         # Iterations with gradient
         if self.Ntrain > 0: 
-            for t in range(self.Ntrain): 
+            print(f"Starting gradient-enabled diffusion for {self.Ntrain} iterations")
+            for t in range(self.Ntrain):
+                if t % 50 == 0:
+                    print(f"Gradient diffusion iteration {t}/{self.Ntrain}")
                 img = diffuse_step(cv, ch, img, l=l)
                 img = adjust_step(img, source, mask_inv, upsample, downsample, eps=eps)
+            print("Gradient-enabled diffusion completed")
 
+        print("Diffuse method completed")
         return img, {"cv": cv, "ch": ch}
     
     def identify_uniform_regions(self, cv, ch, threshold=0.1):
@@ -130,12 +156,18 @@ class FFTGADBase(nn.Module):
         """
         Apply FFT-based diffusion to accelerate the process in uniform regions.
         """
+        print(f"FFT diffuse started with fft_steps={fft_steps}")
         batch_size, channels, height, width = depth.shape
+        print(f"Image shape: {batch_size}x{channels}x{height}x{width}")
         
         # Process the image in blocks
+        block_count = 0
+        fft_applied_count = 0
+        
         for b in range(batch_size):
             for y in range(0, height, self.block_size - self.overlap):
                 for x in range(0, width, self.block_size - self.overlap):
+                    block_count += 1
                     # Define block boundaries with overlap
                     y_end = min(y + self.block_size, height)
                     x_end = min(x + self.block_size, width)
@@ -154,7 +186,9 @@ class FFTGADBase(nn.Module):
                     block_uniform = uniform_regions[b:b+1, :, y_start:y_end, x_start:x_end]
                     
                     # If the block is mostly uniform, apply FFT diffusion
-                    if block_uniform.float().mean() > 0.7:
+                    block_uniformity = block_uniform.float().mean().item()
+                    if block_uniformity > 0.7:
+                        fft_applied_count += 1
                         # Apply FFT-based diffusion
                         block = self.fft_diffuse_block(block, block_cv, block_ch, l, fft_steps)
                         
@@ -182,6 +216,7 @@ class FFTGADBase(nn.Module):
                         else:
                             depth[b:b+1, :, y_start:y_end, x_start:x_end] = block
         
+        print(f"FFT diffuse completed. Processed {block_count} blocks, applied FFT to {fft_applied_count} blocks ({fft_applied_count/block_count*100:.2f}%)")
         return depth
     
     def fft_diffuse_block(self, block, cv, ch, l=0.24, steps=10):
@@ -193,28 +228,33 @@ class FFTGADBase(nn.Module):
         cv_mean = cv.mean()
         ch_mean = ch.mean()
         
-        # Apply FFT
-        fft_block = torch.fft.rfft2(block)
-        
-        # Create diffusion kernel in frequency domain
-        h, w = block.shape[2], block.shape[3]
-        ky = torch.arange(0, h).reshape(-1, 1).repeat(1, w//2 + 1).to(block.device) * (2 * np.pi / h)
-        kx = torch.arange(0, w//2 + 1).reshape(1, -1).repeat(h, 1).to(block.device) * (2 * np.pi / w)
-        
-        # Diffusion operator in frequency domain
-        # This simulates multiple steps of diffusion
-        diffusion_operator = 1 - 2 * l * (cv_mean * (1 - torch.cos(ky)) + ch_mean * (1 - torch.cos(kx)))
-        
-        # Apply multiple steps of diffusion in frequency domain
-        diffusion_operator = diffusion_operator ** steps
-        
-        # Apply the operator
-        fft_block = fft_block * diffusion_operator.unsqueeze(0).unsqueeze(0)
-        
-        # Inverse FFT
-        block = torch.fft.irfft2(fft_block, s=(h, w))
-        
-        return block
+        try:
+            # Apply FFT
+            fft_block = torch.fft.rfft2(block)
+            
+            # Create diffusion kernel in frequency domain
+            h, w = block.shape[2], block.shape[3]
+            ky = torch.arange(0, h).reshape(-1, 1).repeat(1, w//2 + 1).to(block.device) * (2 * np.pi / h)
+            kx = torch.arange(0, w//2 + 1).reshape(1, -1).repeat(h, 1).to(block.device) * (2 * np.pi / w)
+            
+            # Diffusion operator in frequency domain
+            # This simulates multiple steps of diffusion
+            diffusion_operator = 1 - 2 * l * (cv_mean * (1 - torch.cos(ky)) + ch_mean * (1 - torch.cos(kx)))
+            
+            # Apply multiple steps of diffusion in frequency domain
+            diffusion_operator = diffusion_operator ** steps
+            
+            # Apply the operator
+            fft_block = fft_block * diffusion_operator.unsqueeze(0).unsqueeze(0)
+            
+            # Inverse FFT
+            block = torch.fft.irfft2(fft_block, s=(h, w))
+            
+            return block
+        except Exception as e:
+            print(f"Error in FFT diffusion block: {e}")
+            # Return original block if FFT fails
+            return block
 
 def adjust_step(img, source, mask_inv, upsample, downsample, eps=1e-8):
     # Implementation of the adjustment step. Eq (3) in paper.
@@ -230,7 +270,7 @@ def adjust_step(img, source, mask_inv, upsample, downsample, eps=1e-8):
     ratio = upsample(ratio_ss)
 
     # img = img * R
-    return img * ratio 
+    return img * ratio
 
 def _test_fft_gad():
     """
