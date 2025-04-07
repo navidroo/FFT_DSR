@@ -45,7 +45,9 @@ class Evaluator:
                 Npre=args.Npre, 
                 Ntrain=args.Ntrain,
                 block_size=args.block_size,
-                overlap=args.overlap
+                overlap=args.overlap,
+                adaptive_block_size=args.adaptive_block_size,
+                scaling_factor=args.scaling
             )
         else:
             print("Using standard model for evaluation...")
@@ -246,7 +248,17 @@ if __name__ == '__main__':
     
     # Print information about which model will be used
     if args.use_fft:
-        print(f"Using FFT-accelerated model with block_size={args.block_size}, overlap={args.overlap}")
+        if args.adaptive_block_size:
+            base_block_size = args.block_size
+            adjusted_block_size = int(base_block_size * (args.scaling / 4))
+            actual_block_size = max(base_block_size, min(adjusted_block_size, 256))
+            print(f"Using FFT-accelerated model with ADAPTIVE block sizing:")
+            print(f"  - Base block size: {base_block_size}")
+            print(f"  - Scaling factor: {args.scaling}")
+            print(f"  - Calculated block size: {actual_block_size}")
+            print(f"  - Adjusted overlap: {int(args.overlap * (actual_block_size / base_block_size))}")
+        else:
+            print(f"Using FFT-accelerated model with fixed block_size={args.block_size}, overlap={args.overlap}")
     else:
         print("Using standard non-FFT model")
     

@@ -21,3 +21,5 @@ parser.add_argument('--Ntrain', type=int, default=1024, help='N learned iteratio
 parser.add_argument('--use-fft', action='store_true', default=False, help='Use FFT-accelerated model')
 parser.add_argument('--block-size', type=int, default=64, help='Block size for FFT acceleration')
 parser.add_argument('--overlap', type=int, default=16, help='Overlap size for FFT blocks')
+parser.add_argument('--adaptive-block-size', action='store_true', default=False, 
+                    help='Adaptively set block size based on scaling factor (base: 64 for 4x scaling)')

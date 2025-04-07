@@ -45,7 +45,9 @@ class Trainer:
                 Npre=args.Npre,
                 Ntrain=args.Ntrain,
                 block_size=args.block_size,
-                overlap=args.overlap
+                overlap=args.overlap,
+                adaptive_block_size=args.adaptive_block_size,
+                scaling_factor=args.scaling
             )
         else:
             print("Creating standard model...")
@@ -275,6 +277,26 @@ class Trainer:
 if __name__ == '__main__':
     args = train_parser.parse_args()
     print(train_parser.format_values())
+
+    # Print information about model configuration
+    print(f"\nTraining with dataset: {args.dataset}, scaling factor: {args.scaling}")
+    
+    if args.use_fft:
+        if args.adaptive_block_size:
+            base_block_size = args.block_size
+            adjusted_block_size = int(base_block_size * (args.scaling / 4))
+            actual_block_size = max(base_block_size, min(adjusted_block_size, 256))
+            print(f"\nUsing FFT-accelerated model with ADAPTIVE block sizing:")
+            print(f"  - Base block size: {base_block_size}")
+            print(f"  - Scaling factor: {args.scaling}")
+            print(f"  - Calculated block size: {actual_block_size}")
+            print(f"  - Adjusted overlap: {int(args.overlap * (actual_block_size / base_block_size))}")
+        else:
+            print(f"\nUsing FFT-accelerated model with fixed block_size={args.block_size}, overlap={args.overlap}")
+    else:
+        print("\nUsing standard non-FFT model")
+    
+    print(f"Model settings: Npre={args.Npre}, Ntrain={args.Ntrain}")
 
     if args.wandb:
         import wandb

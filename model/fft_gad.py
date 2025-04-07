@@ -20,15 +20,34 @@ class FFTGADBase(nn.Module):
             self, feature_extractor='UNet',
             Npre=2000, Ntrain=256,  # Reduced iterations due to FFT acceleration
             block_size=64, overlap=16,
+            adaptive_block_size=False, scaling_factor=8
     ):
         super().__init__()
-        print(f"Initializing FFTGADBase with Npre={Npre}, Ntrain={Ntrain}, block_size={block_size}, overlap={overlap}")
+        
+        # Store scaling factor and adaptive flag
+        self.adaptive_block_size = adaptive_block_size
+        self.scaling_factor = scaling_factor
+        
+        # Adjust block size if adaptive mode is enabled
+        if adaptive_block_size:
+            # Base the block size on scaling factor: larger blocks for higher scaling
+            # Use a base size of 64 for scaling factor 4
+            adjusted_block_size = int(block_size * (scaling_factor / 4))
+            # Ensure block size is at least the original setting and not too large
+            self.block_size = max(block_size, min(adjusted_block_size, 256))
+            # Scale overlap proportionally
+            self.overlap = int(overlap * (self.block_size / block_size))
+            print(f"Using adaptive block size: {self.block_size} with overlap {self.overlap} for scaling factor {scaling_factor}")
+        else:
+            self.block_size = block_size
+            self.overlap = overlap
+            print(f"Using fixed block size: {self.block_size} with overlap {self.overlap}")
+        
+        print(f"Initializing FFTGADBase with Npre={Npre}, Ntrain={Ntrain}, block_size={self.block_size}, overlap={self.overlap}")
 
         self.feature_extractor_name = feature_extractor    
         self.Npre = Npre
         self.Ntrain = Ntrain
-        self.block_size = block_size
-        self.overlap = overlap
  
         if feature_extractor=='none': 
             # RGB verion of DADA does not need a deep feature extractor
