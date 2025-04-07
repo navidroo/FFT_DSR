@@ -16,6 +16,14 @@ from utils import to_cuda
 from losses import get_loss
 import time
 
+# Function to get GPU memory usage
+def get_gpu_memory_usage():
+    if torch.cuda.is_available():
+        # Returns GPU memory usage in MB
+        return torch.cuda.memory_allocated() / (1024 * 1024), torch.cuda.max_memory_allocated() / (1024 * 1024)
+    else:
+        return 0, 0
+
 
 class Evaluator:
 
@@ -23,6 +31,11 @@ class Evaluator:
         self.args = args
 
         self.dataloader = self.get_dataloader(args)
+        
+        # Reset CUDA memory stats
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+            torch.cuda.empty_cache()
         
         # Choose between regular GADBase and FFT-accelerated version
         if args.use_fft:
@@ -43,21 +56,77 @@ class Evaluator:
 
     def evaluate(self):
         test_stats = defaultdict(float)
-        num_samples = 0 
+        total_images = 0
+        batch_times = []
+        batch_sizes = []
+        # Track memory stats
+        memory_usage = []
 
         self.model.eval()
 
         with torch.no_grad():
             for sample in tqdm(self.dataloader, leave=False):
+                batch_size = sample['guide'].shape[0]
+                batch_sizes.append(batch_size)
+                total_images += batch_size
+                
                 sample = to_cuda(sample)
+                
+                # Record memory before processing
+                if torch.cuda.is_available():
+                    torch.cuda.reset_peak_memory_stats()
+                
+                # Start timing for this batch
+                batch_start = time.time()
                 
                 output = self.model(sample)
                 _, loss_dict = get_loss(output, sample)
+                
+                # End timing for this batch
+                batch_time = time.time() - batch_start
+                batch_times.append(batch_time)
+                
+                # Record peak memory usage for this batch
+                if torch.cuda.is_available():
+                    current_mem, peak_mem = get_gpu_memory_usage()
+                    memory_usage.append(peak_mem)
 
                 for key in loss_dict:
                     test_stats[key] += loss_dict[key]
 
-        return {k: v / len(self.dataloader) for k, v in test_stats.items()}
+        # Calculate timing statistics
+        total_batch_time = sum(batch_times)
+        avg_time_per_image = total_batch_time / total_images
+        
+        # Calculate weighted statistics for batch processing times
+        # This accounts for the last batch potentially having fewer images
+        weighted_times = [batch_times[i] / batch_sizes[i] for i in range(len(batch_times))]
+        min_time_per_image = min(weighted_times)
+        max_time_per_image = max(weighted_times)
+        
+        # Calculate memory statistics
+        if memory_usage:
+            avg_memory = sum(memory_usage) / len(memory_usage)
+            max_memory = max(memory_usage)
+        else:
+            avg_memory = max_memory = 0
+        
+        # Add timing information to the statistics
+        test_stats['total_batch_time'] = total_batch_time
+        test_stats['avg_time_per_image'] = avg_time_per_image
+        test_stats['min_time_per_image'] = min_time_per_image
+        test_stats['max_time_per_image'] = max_time_per_image
+        test_stats['total_images'] = total_images
+        test_stats['num_batches'] = len(batch_times)
+        test_stats['avg_memory_mb'] = avg_memory
+        test_stats['max_memory_mb'] = max_memory
+
+        # Only normalize quality metrics, not timing metrics
+        timing_keys = ['total_batch_time', 'avg_time_per_image', 'min_time_per_image', 
+                       'max_time_per_image', 'total_images', 'num_batches',
+                       'avg_memory_mb', 'max_memory_mb']
+        return {k: v / len(self.dataloader) if k not in timing_keys else v 
+                for k, v in test_stats.items()}
 
     @staticmethod
     def get_dataloader(args: argparse.Namespace):
@@ -195,8 +264,25 @@ if __name__ == '__main__':
     stats['l1_loss'] = 0.1 * std * stats['l1_loss']
     stats['mse_loss'] = 0.01 * std**2 * stats['mse_loss']
 
-    print('\nEvaluation completed in {:.0f}m {:.0f}s'.format(time_elapsed // 60, time_elapsed % 60))
-    print(f"Average time per sample: {time_elapsed / len(evaluator.dataloader):.4f}s")
-    print("\nResults:")
+    print('\n====== Evaluation Results ======')
+    print(f"Total time: {time_elapsed:.2f}s ({time_elapsed // 60:.0f}m {time_elapsed % 60:.0f}s)")
+    print(f"Total images processed: {stats['total_images']}")
+    print(f"Number of batches: {stats['num_batches']}")
+    print(f"Batch size: {args.batch_size}")
+    
+    print('\n====== Timing Statistics ======')
+    print(f"Average time per image: {stats['avg_time_per_image']*1000:.2f}ms ({stats['avg_time_per_image']:.4f}s)")
+    print(f"Minimum time per image: {stats['min_time_per_image']*1000:.2f}ms")
+    print(f"Maximum time per image: {stats['max_time_per_image']*1000:.2f}ms")
+    print(f"Images per second: {1.0/stats['avg_time_per_image']:.2f}")
+    
+    print('\n====== Memory Statistics ======')
+    print(f"Average GPU memory usage: {stats['avg_memory_mb']:.2f} MB")
+    print(f"Maximum GPU memory usage: {stats['max_memory_mb']:.2f} MB")
+    
+    print('\n====== Quality Metrics ======')
     for key, value in stats.items():
-        print(f"  {key}: {value:.6f}")
+        if key not in ['avg_time_per_image', 'min_time_per_image', 'max_time_per_image', 
+                       'total_images', 'total_batch_time', 'num_batches', 
+                       'avg_memory_mb', 'max_memory_mb']:
+            print(f"  {key}: {value:.6f}")
