@@ -181,10 +181,13 @@ class FFTGADBase(nn.Module):
         if h_ch > h_min or w_ch > w_min:
             ch_var = ch_var[:, :, :h_min, :w_min]
         
-        # Regions with low variance are considered uniform
-        uniform_regions = (cv_var < threshold) & (ch_var < threshold)
+        # Adjust threshold based on block size - more lenient for larger blocks
+        adjusted_threshold = threshold * (self.block_size / 64)  # Scale threshold with block size
         
-        print(f"Uniform regions shape: {uniform_regions.shape}")
+        # Regions with low variance are considered uniform
+        uniform_regions = (cv_var < adjusted_threshold) & (ch_var < adjusted_threshold)
+        
+        print(f"Uniform regions shape: {uniform_regions.shape}, using threshold: {adjusted_threshold}")
         return uniform_regions
     
     def fft_diffuse(self, depth, cv, ch, uniform_regions, l=0.24, fft_steps=10):
@@ -194,6 +197,10 @@ class FFTGADBase(nn.Module):
         print(f"FFT diffuse started with fft_steps={fft_steps}")
         batch_size, channels, height, width = depth.shape
         print(f"Image shape: {batch_size}x{channels}x{height}x{width}")
+        
+        # Adjust number of FFT steps based on block size
+        adjusted_fft_steps = int(fft_steps * (self.block_size / 64))
+        print(f"Adjusted FFT steps: {adjusted_fft_steps}")
         
         # Get the shapes of the diffusion coefficients
         _, _, h_cv, w_cv = cv.shape
@@ -242,12 +249,16 @@ class FFTGADBase(nn.Module):
                             
                         block_uniform = uniform_regions[b:b+1, :, y_start:ur_y_end, x_start:ur_x_end]
                         
+                        # Adjust uniformity threshold based on block size
+                        # More lenient for larger blocks
+                        block_uniformity_threshold = 0.7 * (64 / self.block_size)
+                        
                         # If the block is mostly uniform, apply FFT diffusion
                         block_uniformity = block_uniform.float().mean().item()
-                        if block_uniformity > 0.7:
+                        if block_uniformity > block_uniformity_threshold:
                             fft_applied_count += 1
-                            # Apply FFT-based diffusion
-                            block = self.fft_diffuse_block(block, block_cv, block_ch, l, fft_steps)
+                            # Apply FFT-based diffusion with adjusted steps
+                            block = self.fft_diffuse_block(block, block_cv, block_ch, l, adjusted_fft_steps)
                             
                             # Apply blending for overlap regions to avoid boundary artifacts
                             if y > 0 or x > 0:
