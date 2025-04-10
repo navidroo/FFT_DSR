@@ -227,7 +227,8 @@ class MultiResODEGAD(FFTGADBase):
             print("Processing main frequency band")
         
         # Generate diffusion coefficients for the main band
-        cv_main, ch_main = c(band_features[0], K=K)
+        from model.fft_diffusion import c as compute_diffusion_coeff
+        cv_main, ch_main = compute_diffusion_coeff(band_features[0], K=K)
         
         # Create ODE function as nn.Module
         diffusion_ode_func = DiffusionODEFunc(
@@ -275,7 +276,7 @@ class MultiResODEGAD(FFTGADBase):
                 print(f"Processing frequency band {i}")
                 
             # Generate diffusion coefficients for this band
-            cv_band, ch_band = c(band_feats, K=K)
+            cv_band, ch_band = compute_diffusion_coeff(band_feats, K=K)
             
             # Create ODE function for high-frequency bands
             high_freq_ode_func = HighFreqODEFunc(
