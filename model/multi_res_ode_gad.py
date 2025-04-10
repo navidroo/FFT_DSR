@@ -312,7 +312,7 @@ class MultiResODEGAD(FFTGADBase):
         result = self.recombine_frequency_bands(processed_bands, band_weights)
         
         # Final adjustment step to ensure consistency with low-res input
-        result = adjust_step(result, source, mask_inv, upsample, downsample, eps=eps)
+        result = self.custom_adjust_step(result, source, mask_inv, eps=eps)
         
         print("Multi-resolution diffuse method completed")
         return result, {"cv": cv_main, "ch": ch_main}
@@ -392,3 +392,26 @@ class MultiResODEGAD(FFTGADBase):
             result = result + weights[i] * band
             
         return result
+
+    def custom_adjust_step(self, img, source, mask_inv, eps=1e-8):
+        """
+        Custom adjustment step that properly handles tensors of different sizes.
+        Ensures result matches the exact dimensions of the input tensor.
+        """
+        # Get the dimensions of the input image
+        _, _, h, w = img.shape
+        _, _, sh, sw = source.shape
+        
+        # Downsample img to source size
+        downsample = nn.AdaptiveAvgPool2d((sh, sw))
+        img_ss = downsample(img)
+        
+        # Calculate ratio
+        ratio_ss = source / (img_ss + eps)
+        ratio_ss[mask_inv] = 1
+        
+        # Upsample ratio to EXACTLY match img size
+        ratio = F.interpolate(ratio_ss, size=(h, w), mode='bilinear', align_corners=False)
+        
+        # Apply the ratio
+        return img * ratio
