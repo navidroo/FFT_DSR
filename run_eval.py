@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from arguments import eval_parser
-from model import GADBase, FFTGADBase
+from model import GADBase, FFTGADBase, MultiResODEGAD
 from data import MiddleburyDataset, NYUv2Dataset, DIMLDataset
 from utils import to_cuda
 
@@ -37,8 +37,23 @@ class Evaluator:
             torch.cuda.reset_peak_memory_stats()
             torch.cuda.empty_cache()
         
-        # Choose between regular GADBase and FFT-accelerated version
-        if args.use_fft:
+        # Choose model type based on arguments
+        if args.use_multi_res_ode:
+            print("Using Multi-Resolution ODE-based model for evaluation...")
+            self.model = MultiResODEGAD( 
+                args.feature_extractor, 
+                Npre=args.Npre,
+                Ntrain=args.Ntrain,
+                block_size=args.block_size,
+                overlap=args.overlap,
+                adaptive_block_size=args.adaptive_block_size,
+                scaling_factor=args.scaling,
+                bands=args.num_bands,
+                ode_rtol=args.ode_rtol,
+                ode_atol=args.ode_atol,
+                ode_method=args.ode_method
+            )
+        elif args.use_fft:
             print("Using FFT-accelerated model for evaluation...")
             self.model = FFTGADBase(
                 args.feature_extractor, 

@@ -23,3 +23,16 @@ parser.add_argument('--block-size', type=int, default=64, help='Block size for F
 parser.add_argument('--overlap', type=int, default=16, help='Overlap size for FFT blocks')
 parser.add_argument('--adaptive-block-size', action='store_true', default=False, 
                     help='Adaptively set block size based on scaling factor (base: 64 for 4x scaling)')
+
+# Multi-Resolution ODE parameters
+parser.add_argument('--use-multi-res-ode', action='store_true', default=False, 
+                    help='Use Multi-Resolution ODE-based diffusion (recommended for scale=8)')
+parser.add_argument('--num-bands', type=int, default=3, 
+                    help='Number of frequency bands for multi-resolution approach')
+parser.add_argument('--ode-rtol', type=float, default=1e-3, 
+                    help='Relative tolerance for ODE solver')
+parser.add_argument('--ode-atol', type=float, default=1e-3, 
+                    help='Absolute tolerance for ODE solver')
+parser.add_argument('--ode-method', type=str, default='dopri5', 
+                    choices=['dopri5', 'rk4', 'euler'], 
+                    help='ODE solver method')

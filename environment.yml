@@ -17,3 +17,4 @@ dependencies:
     - configargparse
     - segmentation-models-pytorch==0.2
     - tqdm
+    - torchdiffeq==0.2.3

@@ -12,7 +12,7 @@ from torchvision.transforms import Normalize
 from tqdm import tqdm
 
 from arguments import train_parser
-from model import GADBase, FFTGADBase
+from model import GADBase, FFTGADBase, MultiResODEGAD
 from data import MiddleburyDataset, NYUv2Dataset, DIMLDataset
 from losses import get_loss
 from utils import new_log, to_cuda, seed_all
@@ -37,8 +37,23 @@ class Trainer:
         else:
             print("WARNING: CUDA is not available! Training will be extremely slow on CPU.")
             
-        # Choose between regular GADBase and FFT-accelerated version
-        if args.use_fft:
+        # Choose model type based on arguments
+        if args.use_multi_res_ode:
+            print("Creating Multi-Resolution ODE-based model...")
+            self.model = MultiResODEGAD( 
+                args.feature_extractor, 
+                Npre=args.Npre,
+                Ntrain=args.Ntrain,
+                block_size=args.block_size,
+                overlap=args.overlap,
+                adaptive_block_size=args.adaptive_block_size,
+                scaling_factor=args.scaling,
+                bands=args.num_bands,
+                ode_rtol=args.ode_rtol,
+                ode_atol=args.ode_atol,
+                ode_method=args.ode_method
+            )
+        elif args.use_fft:
             print("Creating FFT-accelerated model...")
             self.model = FFTGADBase( 
                 args.feature_extractor, 
