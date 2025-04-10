@@ -25,8 +25,24 @@ class DiffusionODEFunc(nn.Module):
         self.eps = eps
         
     def forward(self, t, y):
+        # Ensure the diffusion coefficients match the size of y
+        _, _, h, w = y.shape
+        _, _, cv_h, cv_w = self.cv.shape
+        _, _, ch_h, ch_w = self.ch.shape
+        
+        # Resize coefficients if necessary
+        if cv_h != h-1 or cv_w != w:
+            cv_resized = F.interpolate(self.cv, size=(h-1, w), mode='bilinear', align_corners=False)
+        else:
+            cv_resized = self.cv
+            
+        if ch_h != h or ch_w != w-1:
+            ch_resized = F.interpolate(self.ch, size=(h, w-1), mode='bilinear', align_corners=False)
+        else:
+            ch_resized = self.ch
+        
         # Basic diffusion update
-        dy = diffuse_step(self.cv, self.ch, y.clone(), l=self.l) - y
+        dy = diffuse_step(cv_resized, ch_resized, y.clone(), l=self.l) - y
         
         # Adjustment step (continuous version)
         y_downsampled = self.downsample(y)
@@ -49,13 +65,36 @@ class HighFreqODEFunc(nn.Module):
         self.l = l
         
     def forward(self, t, y):
+        # Ensure the diffusion coefficients match the size of y
+        _, _, h, w = y.shape
+        _, _, cv_h, cv_w = self.cv.shape
+        _, _, ch_h, ch_w = self.ch.shape
+        
+        # Resize coefficients if necessary
+        if cv_h != h-1 or cv_w != w:
+            cv_resized = F.interpolate(self.cv, size=(h-1, w), mode='bilinear', align_corners=False)
+        else:
+            cv_resized = self.cv
+            
+        if ch_h != h or ch_w != w-1:
+            ch_resized = F.interpolate(self.ch, size=(h, w-1), mode='bilinear', align_corners=False)
+        else:
+            ch_resized = self.ch
+        
         # Edge-preserving diffusion (reduce diffusion near edges)
-        edges = torch.mean(torch.abs(self.band_feats), dim=1, keepdim=True)
+        # Resize band_feats to match the input if needed
+        if self.band_feats.shape[2:] != y.shape[2:]:
+            band_feats_resized = F.interpolate(self.band_feats, size=y.shape[2:], 
+                                             mode='bilinear', align_corners=False)
+        else:
+            band_feats_resized = self.band_feats
+            
+        edges = torch.mean(torch.abs(band_feats_resized), dim=1, keepdim=True)
         edge_weight = torch.exp(-edges * 5.0)  # Reduce diffusion at edges
         
         # Modified diffusion coefficients to preserve edges
-        cv_mod = self.cv * edge_weight
-        ch_mod = self.ch * edge_weight
+        cv_mod = cv_resized * F.interpolate(edge_weight, size=(h-1, w), mode='bilinear', align_corners=False)
+        ch_mod = ch_resized * F.interpolate(edge_weight, size=(h, w-1), mode='bilinear', align_corners=False)
         
         # Compute diffusion update with edge preservation
         return diffuse_step(cv_mod, ch_mod, y.clone(), l=self.l*0.5) - y
