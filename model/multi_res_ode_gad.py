@@ -48,7 +48,9 @@ class DiffusionODEFunc(nn.Module):
         y_downsampled = self.downsample(y)
         ratio_ss = self.source / (y_downsampled + self.eps)
         ratio_ss[self.mask_inv] = 1
-        ratio = self.upsample(ratio_ss)
+        
+        # Use direct resize to match y's dimensions exactly
+        ratio = F.interpolate(ratio_ss, size=(h, w), mode='nearest')
         
         # Apply adjustment with t-dependent weight (more at start, less at end)
         adjustment = y * (ratio - 1.0)
