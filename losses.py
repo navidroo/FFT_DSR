@@ -23,15 +23,22 @@ def mse_loss_func(pred, gt, mask):
 def l1_loss_func(pred, gt, mask):
     """
     Compute L1 loss between prediction and ground truth, masked by the given mask.
-    Handles dimension mismatches by resizing the mask to match prediction dimensions.
+    Handles dimension mismatches by resizing both tensors to match the smaller dimensions.
     """
     # Get dimensions
     _, _, pred_h, pred_w = pred.shape
     _, _, mask_h, mask_w = mask.shape
     
-    # Resize mask if dimensions don't match
-    if (pred_h != mask_h) or (pred_w != mask_w):
-        mask = F.interpolate(mask, size=(pred_h, pred_w), mode='nearest')
+    # Determine target size (use smaller dimensions)
+    target_h = min(pred_h, mask_h)
+    target_w = min(pred_w, mask_w)
+    
+    # Resize tensors if needed
+    if (pred_h != target_h) or (pred_w != target_w):
+        pred = F.interpolate(pred, size=(target_h, target_w), mode='bicubic', align_corners=True)
+        gt = F.interpolate(gt, size=(target_h, target_w), mode='bicubic', align_corners=True)
+    if (mask_h != target_h) or (mask_w != target_w):
+        mask = F.interpolate(mask, size=(target_h, target_w), mode='nearest')
     
     # Apply mask and compute loss
     return F.l1_loss(pred[mask == 1.], gt[mask == 1.])

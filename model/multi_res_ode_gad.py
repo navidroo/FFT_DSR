@@ -383,7 +383,8 @@ class MultiResODEGAD(FFTGADBase):
         
         for i, band in enumerate(bands):
             if band.shape[2:] != target_size:
-                band = F.interpolate(band, target_size, mode='bilinear', align_corners=False)
+                # Use bicubic interpolation for better quality
+                band = F.interpolate(band, target_size, mode='bicubic', align_corners=True)
             aligned_bands.append(band)
             
         # Now combine the bands
