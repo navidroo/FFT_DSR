@@ -18,7 +18,30 @@ def get_loss(output, sample):
         
 
 def mse_loss_func(pred, gt, mask):
-    return F.mse_loss(pred[mask == 1.], gt[mask == 1.])
+    """
+    Compute MSE loss between prediction and ground truth, masked by the given mask.
+    Resizes all tensors to match the prediction size before applying the mask.
+    """
+    # Get dimensions
+    _, _, pred_h, pred_w = pred.shape
+    _, _, mask_h, mask_w = mask.shape
+    _, _, gt_h, gt_w = gt.shape
+    
+    # Resize all tensors to match prediction size
+    if (mask_h != pred_h) or (mask_w != pred_w):
+        mask = F.interpolate(mask, size=(pred_h, pred_w), mode='nearest')
+    
+    if (gt_h != pred_h) or (gt_w != pred_w):
+        gt = F.interpolate(gt, size=(pred_h, pred_w), mode='bicubic', align_corners=True)
+    
+    # Apply mask and compute loss
+    masked_pred = pred[mask == 1.]
+    masked_gt = gt[mask == 1.]
+    
+    if masked_pred.numel() == 0 or masked_gt.numel() == 0:
+        return torch.tensor(0.0, device=pred.device)
+    
+    return F.mse_loss(masked_pred, masked_gt)
 
 
 def l1_loss_func(pred, gt, mask):
