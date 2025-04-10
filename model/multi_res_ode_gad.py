@@ -11,6 +11,55 @@ from model.fft_diffusion import c, g
 INPUT_DIM = 4
 FEATURE_DIM = 64
 
+# Define ODE functions as proper nn.Module classes
+class DiffusionODEFunc(nn.Module):
+    def __init__(self, cv, ch, source, mask_inv, downsample, upsample, l=0.24, eps=1e-8):
+        super().__init__()
+        self.cv = cv
+        self.ch = ch
+        self.source = source
+        self.mask_inv = mask_inv
+        self.downsample = downsample
+        self.upsample = upsample
+        self.l = l
+        self.eps = eps
+        
+    def forward(self, t, y):
+        # Basic diffusion update
+        dy = diffuse_step(self.cv, self.ch, y.clone(), l=self.l) - y
+        
+        # Adjustment step (continuous version)
+        y_downsampled = self.downsample(y)
+        ratio_ss = self.source / (y_downsampled + self.eps)
+        ratio_ss[self.mask_inv] = 1
+        ratio = self.upsample(ratio_ss)
+        
+        # Apply adjustment with t-dependent weight (more at start, less at end)
+        adjustment = y * (ratio - 1.0)
+        adjustment_weight = torch.sigmoid(10 * (1 - t))
+        
+        return dy + adjustment_weight * adjustment
+
+class HighFreqODEFunc(nn.Module):
+    def __init__(self, cv, ch, band_feats, l=0.24):
+        super().__init__()
+        self.cv = cv
+        self.ch = ch
+        self.band_feats = band_feats
+        self.l = l
+        
+    def forward(self, t, y):
+        # Edge-preserving diffusion (reduce diffusion near edges)
+        edges = torch.mean(torch.abs(self.band_feats), dim=1, keepdim=True)
+        edge_weight = torch.exp(-edges * 5.0)  # Reduce diffusion at edges
+        
+        # Modified diffusion coefficients to preserve edges
+        cv_mod = self.cv * edge_weight
+        ch_mod = self.ch * edge_weight
+        
+        # Compute diffusion update with edge preservation
+        return diffuse_step(cv_mod, ch_mod, y.clone(), l=self.l*0.5) - y
+
 class MultiResODEGAD(FFTGADBase):
     """
     Multi-Resolution ODE-based Guided Anisotropic Diffusion for improved performance at high scaling factors.
@@ -138,33 +187,31 @@ class MultiResODEGAD(FFTGADBase):
         # Generate diffusion coefficients for the main band
         cv_main, ch_main = c(band_features[0], K=K)
         
-        # ODE function for diffusion process
-        def diffusion_ode_func(t, y):
-            # Basic diffusion update
-            dy = diffuse_step(cv_main, ch_main, y.clone(), l=l) - y
-            
-            # Adjustment step (continuous version)
-            y_downsampled = downsample(y)
-            ratio_ss = source / (y_downsampled + eps)
-            ratio_ss[mask_inv] = 1
-            ratio = upsample(ratio_ss)
-            
-            # Apply adjustment with t-dependent weight (more at start, less at end)
-            adjustment = y * (ratio - 1.0)
-            adjustment_weight = torch.sigmoid(10 * (1 - t))
-            
-            return dy + adjustment_weight * adjustment
+        # Create ODE function as nn.Module
+        diffusion_ode_func = DiffusionODEFunc(
+            cv=cv_main, 
+            ch=ch_main, 
+            source=source, 
+            mask_inv=mask_inv, 
+            downsample=downsample, 
+            upsample=upsample, 
+            l=l, 
+            eps=eps
+        ).to(img.device)
         
         # Process main band through ODE
         if train and self.Ntrain > 0:
             t_span = torch.linspace(0, 1, 10).to(img.device)
+            # Get all the parameters from the model for adjoint method
+            adjoint_params = tuple(self.parameters())
             bands[0] = odeint(
                 diffusion_ode_func,
                 bands[0],
                 t_span,
                 method=self.ode_method,
                 rtol=self.ode_rtol,
-                atol=self.ode_atol
+                atol=self.ode_atol,
+                adjoint_params=adjoint_params
             )[-1]  # Take final state
         else:
             # For evaluation or if Ntrain=0, use standard diffusion
@@ -188,28 +235,25 @@ class MultiResODEGAD(FFTGADBase):
             # Generate diffusion coefficients for this band
             cv_band, ch_band = c(band_feats, K=K)
             
-            # For higher bands, we use specialized ODE with edge preservation
-            def high_freq_ode_func(t, y):
-                # Edge-preserving diffusion (reduce diffusion near edges)
-                edges = torch.mean(torch.abs(band_feats), dim=1, keepdim=True)
-                edge_weight = torch.exp(-edges * 5.0)  # Reduce diffusion at edges
-                
-                # Modified diffusion coefficients to preserve edges
-                cv_mod = cv_band * edge_weight
-                ch_mod = ch_band * edge_weight
-                
-                # Compute diffusion update with edge preservation
-                return diffuse_step(cv_mod, ch_mod, y.clone(), l=l*0.5) - y
+            # Create ODE function for high-frequency bands
+            high_freq_ode_func = HighFreqODEFunc(
+                cv=cv_band,
+                ch=ch_band,
+                band_feats=band_feats,
+                l=l
+            ).to(img.device)
             
             # Process through ODE solver (for high-frequency, we always use ODE)
             t_span = torch.linspace(0, 1, 5).to(img.device)  # Fewer steps for high-freq
+            adjoint_params = tuple(self.parameters())
             bands[i] = odeint(
                 high_freq_ode_func,
                 bands[i],
                 t_span,
                 method=self.ode_method,
                 rtol=self.ode_rtol*10,  # More relaxed tolerance for high-freq
-                atol=self.ode_atol*10
+                atol=self.ode_atol*10,
+                adjoint_params=adjoint_params
             )[-1]  # Take final state
             
             processed_bands.append(bands[i])
