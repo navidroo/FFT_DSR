@@ -131,13 +131,14 @@ class MultiResODEGAD(FFTGADBase):
         self.ode_rtol = ode_rtol
         self.ode_atol = ode_atol
         self.ode_method = ode_method
+        self.scaling_factor = scaling_factor
         
         # Create separate feature extractors for different frequency bands
         if self.feature_extractor_name == 'UNet':
             print(f"Creating {bands} frequency-specific feature extractors")
             self.band_feature_extractors = nn.ModuleList([
                 torch.nn.Sequential(
-                    torch.nn.Upsample(scale_factor=2, mode='bicubic'),
+                    torch.nn.Upsample(scale_factor=2, mode='bicubic', align_corners=True),
                     smp.Unet('resnet34', classes=FEATURE_DIM, in_channels=INPUT_DIM),
                     torch.nn.AvgPool2d(kernel_size=2, stride=2)
                 ) for _ in range(bands-1)  # High frequency bands
@@ -146,7 +147,7 @@ class MultiResODEGAD(FFTGADBase):
             # Learnable band mixing parameters
             self.band_weights = nn.Parameter(torch.ones(bands)/bands)
             
-        print(f"Initialized MultiResODEGAD with {bands} frequency bands")
+        print(f"Initialized MultiResODEGAD with {bands} frequency bands and scaling factor {scaling_factor}")
         
     def forward(self, sample, train=False, deps=0.1):
         print("MultiResODEGAD forward pass started")
@@ -179,12 +180,12 @@ class MultiResODEGAD(FFTGADBase):
         Multi-resolution diffusion process using ODE solver
         """
         print("Multi-resolution diffuse method started")
-        _,_,h,w = guide.shape
-        _,_,sh,sw = source.shape
+        b, c, h, w = guide.shape
+        _, _, sh, sw = source.shape
 
-        # Define downsampling/upsampling operations
+        # Define downsampling/upsampling operations with proper scaling
         downsample = nn.AdaptiveAvgPool2d((sh, sw))
-        upsample = lambda x: F.interpolate(x, (h, w), mode='nearest')
+        upsample = lambda x: F.interpolate(x, (h, w), mode='bicubic', align_corners=True)
 
         # Decompose input into frequency bands
         print(f"Decomposing input into {self.bands} frequency bands")
@@ -214,7 +215,7 @@ class MultiResODEGAD(FFTGADBase):
                 
                 # Up-interpolate band to match guide size if needed
                 if band_img.shape[2:] != guide.shape[2:]:
-                    band_img = F.interpolate(band_img, guide.shape[2:], mode='bilinear')
+                    band_img = F.interpolate(band_img, guide.shape[2:], mode='bicubic', align_corners=True)
                     
                 band_guide_feats = self.band_feature_extractors[i](
                     torch.cat([guide, band_img-band_img.mean((1,2,3), keepdim=True)], 1)
@@ -351,7 +352,7 @@ class MultiResODEGAD(FFTGADBase):
         for i in range(num_bands - 1):
             # Downsample then upsample to get low-frequency version
             downsampled = F.avg_pool2d(current, kernel_size=2, stride=2)
-            upsampled = F.interpolate(downsampled, current.shape[2:], mode='bilinear', align_corners=False)
+            upsampled = F.interpolate(downsampled, current.shape[2:], mode='bilinear', align_corners=True)
             
             # High frequency is the residual
             high_freq = current - upsampled
@@ -400,7 +401,7 @@ class MultiResODEGAD(FFTGADBase):
         Ensures result matches the exact dimensions of the input tensor.
         """
         # Get the dimensions of the input image
-        _, _, h, w = img.shape
+        b, c, h, w = img.shape
         _, _, sh, sw = source.shape
         
         # Downsample img to source size
@@ -412,7 +413,7 @@ class MultiResODEGAD(FFTGADBase):
         ratio_ss[mask_inv] = 1
         
         # Upsample ratio to EXACTLY match img size
-        ratio = F.interpolate(ratio_ss, size=(h, w), mode='bilinear', align_corners=False)
+        ratio = F.interpolate(ratio_ss, size=(h, w), mode='bilinear', align_corners=True)
         
         # Apply the ratio
         return img * ratio

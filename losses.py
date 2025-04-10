@@ -1,3 +1,4 @@
+import torch
 import torch.nn.functional as F
 
 def get_loss(output, sample):
@@ -23,23 +24,26 @@ def mse_loss_func(pred, gt, mask):
 def l1_loss_func(pred, gt, mask):
     """
     Compute L1 loss between prediction and ground truth, masked by the given mask.
-    Handles dimension mismatches by resizing both tensors to match the smaller dimensions.
+    Resizes all tensors to match the prediction size before applying the mask.
     """
     # Get dimensions
     _, _, pred_h, pred_w = pred.shape
     _, _, mask_h, mask_w = mask.shape
+    _, _, gt_h, gt_w = gt.shape
     
-    # Determine target size (use smaller dimensions)
-    target_h = min(pred_h, mask_h)
-    target_w = min(pred_w, mask_w)
+    # Resize all tensors to match prediction size
+    if (mask_h != pred_h) or (mask_w != pred_w):
+        mask = F.interpolate(mask, size=(pred_h, pred_w), mode='nearest')
     
-    # Resize tensors if needed
-    if (pred_h != target_h) or (pred_w != target_w):
-        pred = F.interpolate(pred, size=(target_h, target_w), mode='bicubic', align_corners=True)
-        gt = F.interpolate(gt, size=(target_h, target_w), mode='bicubic', align_corners=True)
-    if (mask_h != target_h) or (mask_w != target_w):
-        mask = F.interpolate(mask, size=(target_h, target_w), mode='nearest')
+    if (gt_h != pred_h) or (gt_w != pred_w):
+        gt = F.interpolate(gt, size=(pred_h, pred_w), mode='bicubic', align_corners=True)
     
     # Apply mask and compute loss
-    return F.l1_loss(pred[mask == 1.], gt[mask == 1.])
+    masked_pred = pred[mask == 1.]
+    masked_gt = gt[mask == 1.]
+    
+    if masked_pred.numel() == 0 or masked_gt.numel() == 0:
+        return torch.tensor(0.0, device=pred.device)
+    
+    return F.l1_loss(masked_pred, masked_gt)
 
