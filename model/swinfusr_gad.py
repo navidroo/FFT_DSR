@@ -534,7 +534,7 @@ class SwinFuSRGAD(FFTGADBase):
         print(f"FFT diffuse completed. Processed {total_blocks} blocks, applied FFT to {fft_blocks} blocks ({100.0 * fft_blocks / total_blocks:.2f}%)")
         return result
     
-    def fft_diffuse_block_with_grad(self, block, cv, ch, l=0.24, steps=10):
+    def fft_diffuse_block_with_grad(self, block, cv_block, ch_block, l=0.24, steps=10):
         """
         Apply FFT-based diffusion to a block with gradient support.
         This method is used during training when gradients are needed.
@@ -545,11 +545,11 @@ class SwinFuSRGAD(FFTGADBase):
         # Apply multiple standard diffusion steps instead of FFT diffusion
         # This is a compromise that allows gradient flow while still accelerating
         for _ in range(steps // 2):  # Using fewer steps for better efficiency
-            result = diffuse_step(cv, ch, result, l=l)
+            result = diffuse_step(cv_block, ch_block, result, l=l)
             
         return result
 
-    def fft_diffuse_block(self, block, cv, ch, l=0.24, steps=10):
+    def fft_diffuse_block(self, block, cv_block, ch_block, l=0.24, steps=10):
         """
         Apply FFT-based diffusion to a block without gradient support.
         This method is used during inference when gradients are not needed.
@@ -559,6 +559,6 @@ class SwinFuSRGAD(FFTGADBase):
         
         # Apply multiple standard diffusion steps
         for _ in range(steps):
-            result = diffuse_step(cv, ch, result, l=l)
+            result = diffuse_step(cv_block, ch_block, result, l=l)
         
         return result 
