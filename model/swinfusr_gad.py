@@ -375,6 +375,9 @@ class SwinFuSRGAD(FFTGADBase):
         print(f"Diffusion coefficients shapes: cv={cv.shape}, ch={ch.shape}")
         print(f"cv requires grad: {cv.requires_grad}, ch requires grad: {ch.requires_grad}")
         
+        # Print diffusion coefficient means for debugging
+        print(f"CV mean: {cv.mean().item()}, CH mean: {ch.mean().item()}")
+        
         # Identify regions with uniform diffusion coefficients for FFT acceleration
         uniform_regions = self.identify_uniform_regions(cv, ch)
         print(f"Uniform regions shape: uniform_regions={uniform_regions.shape}")
@@ -388,17 +391,86 @@ class SwinFuSRGAD(FFTGADBase):
                 # Apply FFT diffusion to uniform regions
                 img = self.fft_diffuse(img, cv, ch, uniform_regions, l=l)
                 
+                # Check dimensions for entire image diffusion
+                print(f"Before standard diffusion - img: {img.shape}, cv: {cv.shape}, ch: {ch.shape}")
+                
+                # Adjust cv and ch dimensions if needed for full image diffusion
+                if cv.shape[2] != img.shape[2]-1 or cv.shape[3] != img.shape[3]:
+                    print("Warning: Adjusting cv dimensions for full image diffusion")
+                    new_cv = torch.ones(img.shape[0], img.shape[1], img.shape[2]-1, img.shape[3], 
+                                      device=img.device)
+                    # Copy the available values
+                    h_cv = min(new_cv.shape[2], cv.shape[2])
+                    w_cv = min(new_cv.shape[3], cv.shape[3])
+                    new_cv[:, :, :h_cv, :w_cv] = cv[:, :, :h_cv, :w_cv]
+                    cv_adjusted = new_cv
+                else:
+                    cv_adjusted = cv
+                
+                if ch.shape[2] != img.shape[2] or ch.shape[3] != img.shape[3]-1:
+                    print("Warning: Adjusting ch dimensions for full image diffusion")
+                    new_ch = torch.ones(img.shape[0], img.shape[1], img.shape[2], img.shape[3]-1, 
+                                      device=img.device)
+                    # Copy the available values
+                    h_ch = min(new_ch.shape[2], ch.shape[2])
+                    w_ch = min(new_ch.shape[3], ch.shape[3])
+                    new_ch[:, :, :h_ch, :w_ch] = ch[:, :, :h_ch, :w_ch]
+                    ch_adjusted = new_ch
+                else:
+                    ch_adjusted = ch
+                
+                print(f"After adjustment - img: {img.shape}, cv: {cv_adjusted.shape}, ch: {ch_adjusted.shape}")
+                
                 # Standard diffusion for remaining iterations
                 for t in range(min(300, Npre)):  # Reduced iterations due to better features     
                     if t % 100 == 0:
-                        print(f"Iteration {t}/{min(300, Npre)}")              
-                    img = diffuse_step(cv, ch, img, l=l)
+                        print(f"Iteration {t}/{min(300, Npre)}")          
+                    try:
+                        img = diffuse_step(cv_adjusted, ch_adjusted, img, l=l)
+                    except RuntimeError as e:
+                        print(f"Error in full image diffuse_step (iteration {t}): {e}")
+                        print(f"Shapes: img={img.shape}, cv={cv_adjusted.shape}, ch={ch_adjusted.shape}")
+                        raise
                     img = adjust_step(img, source, mask_inv, upsample, downsample, eps=eps)
 
         # If in training mode, ensure img requires grad for the gradient-enabled iterations
         if train and not img.requires_grad:
             print("Re-enabling gradients for training iterations")
             img = img.detach().requires_grad_(True)
+        
+        # Adjust cv and ch for the gradient stage if needed
+        if train:
+            if cv.shape[2] != img.shape[2]-1 or cv.shape[3] != img.shape[3]:
+                print("Warning: Adjusting cv dimensions for gradient training")
+                new_cv = torch.ones(img.shape[0], img.shape[1], img.shape[2]-1, img.shape[3], 
+                                  device=img.device)
+                if cv.requires_grad:
+                    new_cv = new_cv.requires_grad_()
+                # Copy the available values
+                h_cv = min(new_cv.shape[2], cv.shape[2])
+                w_cv = min(new_cv.shape[3], cv.shape[3])
+                new_cv[:, :, :h_cv, :w_cv] = cv[:, :, :h_cv, :w_cv]
+                cv_gradient = new_cv
+            else:
+                cv_gradient = cv
+            
+            if ch.shape[2] != img.shape[2] or ch.shape[3] != img.shape[3]-1:
+                print("Warning: Adjusting ch dimensions for gradient training")
+                new_ch = torch.ones(img.shape[0], img.shape[1], img.shape[2], img.shape[3]-1, 
+                                  device=img.device)
+                if ch.requires_grad:
+                    new_ch = new_ch.requires_grad_()
+                # Copy the available values
+                h_ch = min(new_ch.shape[2], ch.shape[2])
+                w_ch = min(new_ch.shape[3], ch.shape[3])
+                new_ch[:, :, :h_ch, :w_ch] = ch[:, :, :h_ch, :w_ch]
+                ch_gradient = new_ch
+            else:
+                ch_gradient = ch
+        else:
+            # For inference, reuse the adjusted tensors from the first stage
+            cv_gradient = cv_adjusted if 'cv_adjusted' in locals() else cv
+            ch_gradient = ch_adjusted if 'ch_adjusted' in locals() else ch
                 
         # Second stage: iterations with gradient
         if self.Ntrain > 0: 
@@ -407,8 +479,13 @@ class SwinFuSRGAD(FFTGADBase):
                 if t % 50 == 0:
                     print(f"Iteration {t}/{self.Ntrain}")
                     if train:
-                        print(f"Tensor requires grad: img={img.requires_grad}, cv={cv.requires_grad}, ch={ch.requires_grad}")
-                img = diffuse_step(cv, ch, img, l=l)
+                        print(f"Tensor requires grad: img={img.requires_grad}, cv={cv_gradient.requires_grad}, ch={ch_gradient.requires_grad}")
+                try:
+                    img = diffuse_step(cv_gradient, ch_gradient, img, l=l)
+                except RuntimeError as e:
+                    print(f"Error in gradient diffuse_step (iteration {t}): {e}")
+                    print(f"Shapes: img={img.shape}, cv={cv_gradient.shape}, ch={ch_gradient.shape}")
+                    raise
                 img = adjust_step(img, source, mask_inv, upsample, downsample, eps=eps)
                 
         print(f"SwinFuSRGAD diffuse output shape: img={img.shape}")
@@ -542,10 +619,49 @@ class SwinFuSRGAD(FFTGADBase):
         # Use a simplified diffusion approach that maintains gradient flow
         result = block.clone()
         
+        # Print shapes for debugging
+        print(f"In fft_diffuse_block_with_grad - block: {block.shape}, cv_block: {cv_block.shape}, ch_block: {ch_block.shape}")
+        
+        # Check that dimensions are compatible with diffuse_step operation
+        # In diffuse_step, cv is used with vertical differences which are height-1
+        # ch is used with horizontal differences which are width-1
+        if cv_block.shape[2] != block.shape[2]-1 or cv_block.shape[3] != block.shape[3]:
+            print("Warning: Adjusting cv_block dimensions for diffuse_step")
+            # Create a new cv_block with correct dimensions
+            new_cv = torch.ones(block.shape[0], block.shape[1], block.shape[2]-1, block.shape[3], 
+                              device=block.device)
+            if cv_block.requires_grad:
+                new_cv = new_cv.requires_grad_()
+            # Copy the available values
+            h = min(new_cv.shape[2], cv_block.shape[2])
+            w = min(new_cv.shape[3], cv_block.shape[3])
+            new_cv[:, :, :h, :w] = cv_block[:, :, :h, :w]
+            cv_block = new_cv
+        
+        if ch_block.shape[2] != block.shape[2] or ch_block.shape[3] != block.shape[3]-1:
+            print("Warning: Adjusting ch_block dimensions for diffuse_step")
+            # Create a new ch_block with correct dimensions
+            new_ch = torch.ones(block.shape[0], block.shape[1], block.shape[2], block.shape[3]-1, 
+                              device=block.device)
+            if ch_block.requires_grad:
+                new_ch = new_ch.requires_grad_()
+            # Copy the available values
+            h = min(new_ch.shape[2], ch_block.shape[2])
+            w = min(new_ch.shape[3], ch_block.shape[3])
+            new_ch[:, :, :h, :w] = ch_block[:, :, :h, :w]
+            ch_block = new_ch
+        
+        print(f"After adjustment - block: {block.shape}, cv_block: {cv_block.shape}, ch_block: {ch_block.shape}")
+        
         # Apply multiple standard diffusion steps instead of FFT diffusion
         # This is a compromise that allows gradient flow while still accelerating
-        for _ in range(steps // 2):  # Using fewer steps for better efficiency
-            result = diffuse_step(cv_block, ch_block, result, l=l)
+        for i in range(steps // 2):  # Using fewer steps for better efficiency
+            try:
+                result = diffuse_step(cv_block, ch_block, result, l=l)
+            except RuntimeError as e:
+                print(f"Error in diffuse_step (iteration {i}): {e}")
+                print(f"Shapes: block={result.shape}, cv={cv_block.shape}, ch={ch_block.shape}")
+                raise
             
         return result
 
@@ -557,8 +673,43 @@ class SwinFuSRGAD(FFTGADBase):
         # Use a standard diffusion approach
         result = block.clone()
         
+        # Print shapes for debugging
+        print(f"In fft_diffuse_block - block: {block.shape}, cv_block: {cv_block.shape}, ch_block: {ch_block.shape}")
+        
+        # Check that dimensions are compatible with diffuse_step operation
+        # In diffuse_step, cv is used with vertical differences which are height-1
+        # ch is used with horizontal differences which are width-1
+        if cv_block.shape[2] != block.shape[2]-1 or cv_block.shape[3] != block.shape[3]:
+            print("Warning: Adjusting cv_block dimensions for diffuse_step")
+            # Create a new cv_block with correct dimensions
+            new_cv = torch.ones(block.shape[0], block.shape[1], block.shape[2]-1, block.shape[3], 
+                              device=block.device)
+            # Copy the available values
+            h = min(new_cv.shape[2], cv_block.shape[2])
+            w = min(new_cv.shape[3], cv_block.shape[3])
+            new_cv[:, :, :h, :w] = cv_block[:, :, :h, :w]
+            cv_block = new_cv
+        
+        if ch_block.shape[2] != block.shape[2] or ch_block.shape[3] != block.shape[3]-1:
+            print("Warning: Adjusting ch_block dimensions for diffuse_step")
+            # Create a new ch_block with correct dimensions
+            new_ch = torch.ones(block.shape[0], block.shape[1], block.shape[2], block.shape[3]-1, 
+                              device=block.device)
+            # Copy the available values
+            h = min(new_ch.shape[2], ch_block.shape[2])
+            w = min(new_ch.shape[3], ch_block.shape[3])
+            new_ch[:, :, :h, :w] = ch_block[:, :, :h, :w]
+            ch_block = new_ch
+        
+        print(f"After adjustment - block: {block.shape}, cv_block: {cv_block.shape}, ch_block: {ch_block.shape}")
+        
         # Apply multiple standard diffusion steps
-        for _ in range(steps):
-            result = diffuse_step(cv_block, ch_block, result, l=l)
+        for i in range(steps):
+            try:
+                result = diffuse_step(cv_block, ch_block, result, l=l)
+            except RuntimeError as e:
+                print(f"Error in diffuse_step (iteration {i}): {e}")
+                print(f"Shapes: block={result.shape}, cv={cv_block.shape}, ch={ch_block.shape}")
+                raise
         
         return result 
