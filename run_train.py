@@ -12,7 +12,7 @@ from torchvision.transforms import Normalize
 from tqdm import tqdm
 
 from arguments import train_parser
-from model import GADBase, FFTGADBase, MultiResODEGAD
+from model import GADBase, FFTGADBase, MultiResODEGAD, SwinFuSRGAD
 from data import MiddleburyDataset, NYUv2Dataset, DIMLDataset
 from losses import get_loss
 from utils import new_log, to_cuda, seed_all
@@ -38,7 +38,21 @@ class Trainer:
             print("WARNING: CUDA is not available! Training will be extremely slow on CPU.")
             
         # Choose model type based on arguments
-        if args.use_multi_res_ode:
+        if args.use_swinfusr:
+            print("Creating SwinFuSR-GAD model...")
+            self.model = SwinFuSRGAD(
+                feature_extractor='SwinFuSR',
+                Npre=args.Npre,
+                Ntrain=args.Ntrain,
+                block_size=args.block_size,
+                overlap=args.overlap,
+                adaptive_block_size=args.adaptive_block_size,
+                scaling_factor=args.scaling,
+                swin_window_size=args.swin_window_size,
+                num_heads=args.num_heads,
+                num_swin_blocks=args.num_swin_blocks
+            )
+        elif args.use_multi_res_ode:
             print("Creating Multi-Resolution ODE-based model...")
             self.model = MultiResODEGAD( 
                 args.feature_extractor, 

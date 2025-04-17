@@ -36,3 +36,13 @@ parser.add_argument('--ode-atol', type=float, default=1e-3,
 parser.add_argument('--ode-method', type=str, default='dopri5', 
                     choices=['dopri5', 'rk4', 'euler'], 
                     help='ODE solver method')
+
+# SwinFuSR-specific parameters
+parser.add_argument('--use-swinfusr', action='store_true', default=False, 
+                    help='Use SwinFuSR-GAD model with Swin Transformers and cross-domain fusion')
+parser.add_argument('--swin-window-size', type=int, default=7, 
+                    help='Window size for Swin Transformer attention')
+parser.add_argument('--num-heads', type=int, default=3, 
+                    help='Number of attention heads in Swin Transformer')
+parser.add_argument('--num-swin-blocks', type=int, default=4, 
+                    help='Number of Swin Transformer blocks')

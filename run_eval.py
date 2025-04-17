@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from arguments import eval_parser
-from model import GADBase, FFTGADBase, MultiResODEGAD
+from model import GADBase, FFTGADBase, MultiResODEGAD, SwinFuSRGAD
 from data import MiddleburyDataset, NYUv2Dataset, DIMLDataset
 from utils import to_cuda
 
@@ -38,7 +38,21 @@ class Evaluator:
             torch.cuda.empty_cache()
         
         # Choose model type based on arguments
-        if args.use_multi_res_ode:
+        if args.use_swinfusr:
+            print("Using SwinFuSR-GAD model for evaluation...")
+            self.model = SwinFuSRGAD(
+                feature_extractor='SwinFuSR',
+                Npre=args.Npre,
+                Ntrain=args.Ntrain,
+                block_size=args.block_size,
+                overlap=args.overlap,
+                adaptive_block_size=args.adaptive_block_size,
+                scaling_factor=args.scaling,
+                swin_window_size=args.swin_window_size,
+                num_heads=args.num_heads,
+                num_swin_blocks=args.num_swin_blocks
+            )
+        elif args.use_multi_res_ode:
             print("Using Multi-Resolution ODE-based model for evaluation...")
             self.model = MultiResODEGAD( 
                 args.feature_extractor, 

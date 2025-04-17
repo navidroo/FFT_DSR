@@ -18,3 +18,4 @@ dependencies:
     - segmentation-models-pytorch==0.2
     - tqdm
     - torchdiffeq==0.2.3
+    - einops  # For efficient tensor operations used in transformers
