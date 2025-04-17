@@ -47,6 +47,7 @@ class SwinTransformerBlock(nn.Module):
         
     def forward(self, x):
         B, C, H, W = x.shape
+        print(f"SwinTransformerBlock input shape: {x.shape}")
         
         # Rearrange to tokens
         x = x.flatten(2).transpose(1, 2)  # B, H*W, C
@@ -57,24 +58,18 @@ class SwinTransformerBlock(nn.Module):
         x = x.view(B, H, W, C)
         
         # Window partition and attention
-        pad_h = (self.window_size - H % self.window_size) % self.window_size
-        pad_w = (self.window_size - W % self.window_size) % self.window_size
-        if pad_h > 0 or pad_w > 0:
-            x = F.pad(x, (0, 0, 0, pad_w, 0, pad_h))
+        x_windows, original_size, padded_size = window_partition(x, self.window_size)
+        H_padded, W_padded = padded_size
         
-        Hp, Wp = H + pad_h, W + pad_w
-        x_windows = window_partition(x, self.window_size)  # nW*B, window_size, window_size, C
-        x_windows = x_windows.view(-1, self.window_size * self.window_size, C)  # nW*B, window_size*window_size, C
+        # Reshape for attention
+        x_windows = x_windows.view(-1, self.window_size * self.window_size, C)
         
         # Window attention
         attn_windows = self.attn(x_windows)  # nW*B, window_size*window_size, C
         
         # Merge windows
         attn_windows = attn_windows.view(-1, self.window_size, self.window_size, C)
-        x = window_reverse(attn_windows, self.window_size, Hp, Wp)  # B, Hp, Wp, C
-        
-        if pad_h > 0 or pad_w > 0:
-            x = x[:, :H, :W, :].contiguous()
+        x = window_reverse(attn_windows, self.window_size, H_padded, W_padded, original_size)  # B, H, W, C
         
         # Reshape back
         x = x.view(B, H * W, C)
@@ -87,6 +82,7 @@ class SwinTransformerBlock(nn.Module):
         
         # Reshape back to feature map
         x = x.transpose(1, 2).view(B, C, H, W)
+        print(f"SwinTransformerBlock output shape: {x.shape}")
         return x
 
 
@@ -124,18 +120,46 @@ class WindowAttention(nn.Module):
 
 
 def window_partition(x, window_size):
-    """Partition into non-overlapping windows"""
+    """Partition into non-overlapping windows with padding if needed"""
     B, H, W, C = x.shape
-    x = x.view(B, H // window_size, window_size, W // window_size, window_size, C)
+    print(f"window_partition input: {x.shape}, window_size={window_size}")
+    
+    # Apply padding if needed
+    pad_h = (window_size - H % window_size) % window_size
+    pad_w = (window_size - W % window_size) % window_size
+    
+    if pad_h > 0 or pad_w > 0:
+        print(f"Applying padding: pad_h={pad_h}, pad_w={pad_w}")
+        x = F.pad(x, (0, 0, 0, pad_w, 0, pad_h))
+        H_padded, W_padded = H + pad_h, W + pad_w
+    else:
+        H_padded, W_padded = H, W
+    
+    print(f"After padding: {x.shape}")
+    
+    x = x.view(B, H_padded // window_size, window_size, W_padded // window_size, window_size, C)
     windows = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, window_size, window_size, C)
-    return windows
+    
+    print(f"window_partition output: {windows.shape}, padding info: ({H}, {W})->({H_padded}, {W_padded})")
+    return windows, (H, W), (H_padded, W_padded)
 
 
-def window_reverse(windows, window_size, H, W):
-    """Reverse window partition"""
-    B = int(windows.shape[0] / (H * W / window_size / window_size))
-    x = windows.view(B, H // window_size, W // window_size, window_size, window_size, -1)
-    x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H, W, -1)
+def window_reverse(windows, window_size, H_padded, W_padded, original_size=None):
+    """Reverse window partition and remove padding if needed"""
+    print(f"window_reverse input: {windows.shape}, window_size={window_size}, H_padded={H_padded}, W_padded={W_padded}")
+    
+    B = int(windows.shape[0] / (H_padded * W_padded / window_size / window_size))
+    x = windows.view(B, H_padded // window_size, W_padded // window_size, window_size, window_size, -1)
+    x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H_padded, W_padded, -1)
+    
+    # Remove padding if original size is provided
+    if original_size:
+        H, W = original_size
+        if H < H_padded or W < W_padded:
+            print(f"Removing padding: ({H_padded}, {W_padded})->({H}, {W})")
+            x = x[:, :H, :W, :].contiguous()
+    
+    print(f"window_reverse output: {x.shape}")
     return x
 
 
@@ -274,7 +298,14 @@ class SwinFuSRGAD(FFTGADBase):
         """Extract features using Swin Transformer blocks and fusion"""
         # Initial feature extraction
         rgb_feat = self.rgb_conv(guide)
-        depth_feat = self.depth_conv(img.unsqueeze(1))
+        
+        # Check img dimensions and handle accordingly
+        if img.dim() == 3:  # No channel dimension (B, H, W)
+            depth_feat = self.depth_conv(img.unsqueeze(1))
+        elif img.dim() == 4 and img.shape[1] == 1:  # Already has channel dimension (B, 1, H, W)
+            depth_feat = self.depth_conv(img)
+        else:  # Handle any other case (reshape if needed)
+            depth_feat = self.depth_conv(img.view(img.shape[0], 1, img.shape[-2], img.shape[-1]))
         
         # Process through Swin blocks
         for rgb_block, depth_block in zip(self.rgb_swin_blocks, self.depth_swin_blocks):
@@ -291,6 +322,8 @@ class SwinFuSRGAD(FFTGADBase):
         
     def forward(self, sample, train=False, deps=0.1):
         guide, source, mask_lr = sample['guide'], sample['source'], sample['mask_lr']
+        
+        print(f"SwinFuSRGAD forward input shapes: guide={guide.shape}, source={source.shape}, y_bicubic={sample['y_bicubic'].shape}")
 
         # Handle negative depth values
         if source.min() <= deps:
@@ -308,12 +341,16 @@ class SwinFuSRGAD(FFTGADBase):
         # Revert the shift if needed
         if shifted:
             y_pred -= deps
+            
+        print(f"SwinFuSRGAD forward output shape: y_pred={y_pred.shape}")
 
         return {**{'y_pred': y_pred}, **aux}
     
     def diffuse(self, img, guide, source, mask_inv,
         l=0.24, K=0.01, verbose=False, eps=1e-8, train=False):
         """Modified diffuse method using SwinFuSR features"""
+        print(f"SwinFuSRGAD diffuse input shapes: img={img.shape}, guide={guide.shape}, source={source.shape}")
+        
         _,_,h,w = guide.shape
         _,_,sh,sw = source.shape
 
@@ -323,30 +360,40 @@ class SwinFuSRGAD(FFTGADBase):
 
         # Extract features using SwinFuSR instead of the original method
         guide_feats = self.extract_features(guide, img)
+        print(f"Feature extraction output shape: guide_feats={guide_feats.shape}")
         
         # Convert features to diffusion coefficients
         cv, ch = c(guide_feats, K=K)
+        print(f"Diffusion coefficients shapes: cv={cv.shape}, ch={ch.shape}")
         
         # Identify regions with uniform diffusion coefficients for FFT acceleration
         uniform_regions = self.identify_uniform_regions(cv, ch)
+        print(f"Uniform regions shape: uniform_regions={uniform_regions.shape}")
         
         # First stage: iterations without gradient
         if self.Npre > 0: 
             with torch.no_grad():
                 Npre = np.random.randint(0, self.Npre) if train else self.Npre
+                print(f"Starting {Npre} iterations without gradient")
                 
                 # Apply FFT diffusion to uniform regions
                 img = self.fft_diffuse(img, cv, ch, uniform_regions, l=l)
                 
                 # Standard diffusion for remaining iterations
-                for t in range(min(300, Npre)):  # Reduced iterations due to better features                   
+                for t in range(min(300, Npre)):  # Reduced iterations due to better features     
+                    if t % 100 == 0:
+                        print(f"Iteration {t}/{min(300, Npre)}")              
                     img = diffuse_step(cv, ch, img, l=l)
                     img = adjust_step(img, source, mask_inv, upsample, downsample, eps=eps)
 
         # Second stage: iterations with gradient
         if self.Ntrain > 0: 
+            print(f"Starting {self.Ntrain} iterations with gradient")
             for t in range(self.Ntrain):
+                if t % 50 == 0:
+                    print(f"Iteration {t}/{self.Ntrain}")
                 img = diffuse_step(cv, ch, img, l=l)
                 img = adjust_step(img, source, mask_inv, upsample, downsample, eps=eps)
 
+        print(f"SwinFuSRGAD diffuse output shape: img={img.shape}")
         return img, {"cv": cv, "ch": ch} 
